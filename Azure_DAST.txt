@@ -1,0 +1,79 @@
+trigger: none   # manual or scheduled only
+
+schedules:
+  - cron: "0 2 1 * *"   # Every month on the 1st, 02:00 UTC
+    displayName: "Monthly DAST Scan (Checkmarx One Cloud)"
+    branches:
+      include:
+        - main
+    always: true
+
+variables:
+  CX_APIKEY: $(CX_APIKEY)              # store securely in pipeline variables
+  CX_BASE_URL: "https://ast.checkmarx.net"   # adjust if region-specific
+  CX_PROJECT_NAME: "Monthly-DAST-Scan"
+  URLS_FILE: "$(Build.SourcesDirectory)/dast/urls.txt"
+  DAST_CONFIG_FILE: "$(Build.SourcesDirectory)/dast/dast_config.yaml"
+  OUTPUT_DIR: "$(Build.ArtifactStagingDirectory)/dast_reports"
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+jobs:
+- job: DAST_Scan
+  displayName: "Run Checkmarx One DAST Cloud Scans"
+  steps:
+  - checkout: self
+
+  # 1️⃣ Install the Checkmarx One CLI
+  - task: Bash@3
+    displayName: "Install Checkmarx One CLI"
+    inputs:
+      targetType: 'inline'
+      script: |
+        echo "Downloading Checkmarx One CLI..."
+        curl -sSL "https://downloads.checkmarx.com/cli/latest/linux/cx" -o /usr/local/bin/cx
+        chmod +x /usr/local/bin/cx
+        cx version
+
+  # 2️⃣ Authenticate with Checkmarx One
+  - task: Bash@3
+    displayName: "Authenticate with Checkmarx One"
+    inputs:
+      targetType: 'inline'
+      script: |
+        cx configure set api-key "${CX_APIKEY}"
+        cx configure set base-url "${CX_BASE_URL}"
+        cx auth test
+
+  # 3️⃣ Run DAST scans against all URLs
+  - task: Bash@3
+    displayName: "Run DAST scans for each target"
+    inputs:
+      targetType: 'inline'
+      script: |
+        mkdir -p "${OUTPUT_DIR}"
+
+        while read -r url; do
+          if [[ -z "$url" ]]; then continue; fi
+          echo "🚀 Starting DAST scan for: $url"
+
+          scan_name="DAST-$(date +%Y%m%d)-$(echo $url | tr '/:' '_')"
+
+          cx dast scan create \
+            --project-name "${CX_PROJECT_NAME}" \
+            --name "${scan_name}" \
+            --target-url "$url" \
+            --config-file "${DAST_CONFIG_FILE}" \
+            --report-format pdf,json \
+            --output-path "${OUTPUT_DIR}/${scan_name}"
+
+          echo "✅ Completed scan for $url"
+        done < "${URLS_FILE}"
+
+  # 4️⃣ Publish results
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish DAST reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/dast_reports"
+      artifact: "DAST_Reports"

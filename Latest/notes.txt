@@ -1,0 +1,9 @@
+Setup Checklist
+Step	Action
+1	In Azure DevOps → Library → Variable Groups, create DAST-Secrets.
+2	Add variables:
+CX_APIKEY (secret) – your Checkmarx One API key
+TEAMS_WEBHOOK_URL (secret) – Teams incoming webhook URL
+3	Add the above three files to your repository under /dast/.
+4	Commit to main branch — pipeline will trigger automatically every month.
+5	After run: download results under Pipelines → Artifacts → DAST_Reports and check your Teams channel.

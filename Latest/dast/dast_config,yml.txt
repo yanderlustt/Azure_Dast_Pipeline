@@ -1,0 +1,52 @@
+# =========================================================
+#  Checkmarx One DAST Configuration (Black-box mode)
+# =========================================================
+
+version: 1.0
+
+scan:
+  name: "Monthly Blackbox DAST"
+  type: "web"
+  allowFingerprinting: true
+  maxScanDuration: 180     # minutes (3 hours)
+  scope:
+    include:
+      - "https://staging.example.com/*"
+      - "https://portal.example.com/*"
+      - "https://api.example.com/*"
+    exclude:
+      - "https://staging.example.com/logout*"
+      - "https://staging.example.com/admin*"
+  restrictToBaseDomain: true
+
+authentication:
+  enabled: false
+  type: "none"
+
+crawler:
+  maxDepth: 6
+  maxUrls: 2000
+  obeyRobotsTxt: false
+  followSubdomains: false
+  includeQueryParams: true
+  delayBetweenRequests: 0.3
+
+attack:
+  policy: "OWASP_TOP_10"
+  requestTimeout: 30
+  maxConcurrentRequests: 10
+  retryFailedRequests: true
+  stopOnFirstCritical: false
+
+report:
+  formats:
+    - pdf
+    - json
+  includeEvidence: true
+  includeRequestResponse: true
+  includeScanSummary: true
+  includeRemediation: true
+
+logging:
+  level: info
+  saveHttpTraffic: false

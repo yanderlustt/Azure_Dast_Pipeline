@@ -1,0 +1,126 @@
+trigger: none
+
+schedules:
+  - cron: "30 2 1 * *"   # 7:30 AM IST (02:30 UTC)
+    displayName: "Monthly Blackbox DAST Scan"
+    branches:
+      include:
+        - main
+    always: true
+
+variables:
+  CX_APIKEY: $(CX_APIKEY)               # stored securely
+  CX_BASE_URL: "https://ast.checkmarx.net"
+  CX_PROJECT_NAME: "Monthly-DAST-Blackbox"
+  URLS_FILE: "$(Build.SourcesDirectory)/dast/urls.txt"
+  DAST_CONFIG_FILE: "$(Build.SourcesDirectory)/dast/dast_config.yaml"
+  OUTPUT_DIR: "$(Build.ArtifactStagingDirectory)/dast_reports"
+  TEAMS_WEBHOOK_URL: $(TEAMS_WEBHOOK_URL)
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+jobs:
+- job: DAST_Scan
+  displayName: "Run Checkmarx One Cloud DAST (Blackbox)"
+  steps:
+  - checkout: self
+
+  # 1️⃣ Install Checkmarx One CLI
+  - task: Bash@3
+    displayName: "Install Checkmarx One CLI"
+    inputs:
+      targetType: 'inline'
+      script: |
+        echo "Downloading Checkmarx One CLI..."
+        curl -sSL "https://downloads.checkmarx.com/cli/latest/linux/cx" -o /usr/local/bin/cx
+        chmod +x /usr/local/bin/cx
+        cx version
+
+  # 2️⃣ Authenticate with Checkmarx One Cloud
+  - task: Bash@3
+    displayName: "Authenticate with Checkmarx One Cloud"
+    inputs:
+      targetType: 'inline'
+      script: |
+        cx configure set api-key "${CX_APIKEY}"
+        cx configure set base-url "${CX_BASE_URL}"
+        cx auth test
+
+  # 3️⃣ Run DAST scans for each URL (black-box)
+  - task: Bash@3
+    displayName: "Run DAST Scans"
+    inputs:
+      targetType: 'inline'
+      script: |
+        mkdir -p "${OUTPUT_DIR}"
+        SCAN_COUNT=0
+
+        while read -r url; do
+          if [[ -z "$url" ]]; then continue; fi
+          SCAN_COUNT=$((SCAN_COUNT+1))
+          echo "🚀 Running DAST scan for: $url"
+
+          scan_name="DAST-$(date +%Y%m%d)-$(echo $url | tr '/:' '_')"
+
+          cx dast scan create \
+            --project-name "${CX_PROJECT_NAME}" \
+            --name "${scan_name}" \
+            --target-url "$url" \
+            --config-file "${DAST_CONFIG_FILE}" \
+            --report-format pdf,json \
+            --output-path "${OUTPUT_DIR}/${scan_name}"
+
+          echo "✅ Completed DAST for $url"
+        done < "${URLS_FILE}"
+
+        echo $SCAN_COUNT > $(Build.ArtifactStagingDirectory)/scan_count.txt
+
+  # 4️⃣ Publish Reports as Artifacts
+  - task: PublishPipelineArtifact@1
+    displayName: "Publish DAST Reports"
+    inputs:
+      targetPath: "$(Build.ArtifactStagingDirectory)/dast_reports"
+      artifact: "DAST_Reports"
+
+  # 5️⃣ Notify Teams Channel
+  - task: Bash@3
+    displayName: "Send Microsoft Teams Notification"
+    inputs:
+      targetType: 'inline'
+      script: |
+        SCAN_COUNT=$(cat $(Build.ArtifactStagingDirectory)/scan_count.txt)
+        BUILD_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_build/results?buildId=${BUILD_BUILDID}"
+        REPORT_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI}${SYSTEM_TEAMPROJECT}/_apis/build/builds/${BUILD_BUILDID}/artifacts?artifactName=DAST_Reports"
+
+        MESSAGE="{
+          \"@type\": \"MessageCard\",
+          \"@context\": \"https://schema.org/extensions\",
+          \"summary\": \"Monthly DAST Scan Completed\",
+          \"themeColor\": \"0076D7\",
+          \"title\": \"✅ Checkmarx One Monthly DAST Scan Results\",
+          \"sections\": [{
+            \"activityTitle\": \"Black-box DAST Scan Completed\",
+            \"activitySubtitle\": \"Project: ${CX_PROJECT_NAME}\",
+            \"facts\": [
+              {\"name\": \"Date\", \"value\": \"$(date '+%Y-%m-%d %H:%M')\"},
+              {\"name\": \"Scanned URLs\", \"value\": \"$SCAN_COUNT\"},
+              {\"name\": \"Build ID\", \"value\": \"${BUILD_BUILDID}\"}
+            ],
+            \"markdown\": true
+          }],
+          \"potentialAction\": [
+            {
+              \"@type\": \"OpenUri\",
+              \"name\": \"View Build Summary\",
+              \"targets\": [{\"os\": \"default\", \"uri\": \"${BUILD_URL}\"}]
+            },
+            {
+              \"@type\": \"OpenUri\",
+              \"name\": \"Download Reports (Artifacts)\",
+              \"targets\": [{\"os\": \"default\", \"uri\": \"${REPORT_URL}\"}]
+            }
+          ]
+        }"
+
+        curl -H "Content-Type: application/json" -d "$MESSAGE" "${TEAMS_WEBHOOK_URL}"
